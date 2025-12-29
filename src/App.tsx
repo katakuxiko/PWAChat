@@ -39,13 +39,17 @@ function App() {
 							: "☀️ Светлая тема"}
 					</button>
 					<div className="h-screen flex flex-col justify-between bg-white dark:bg-gray-800 max-w-lg w-full m-4 mb-0 rounded-lg shadow-lg transition-colors">
-						<div className="flex flex-col p-4 gap-4">
+						<div className="flex flex-col p-4 gap-4 max-h-[calc(100vh-132px)] overflow-y-auto">
 							{messages.map((msg) => (
 								<Bubble
 									key={msg.key}
 									role={msg.role}
 									content={msg.content}
-									typing
+									typing={
+										msg.role === "ai" ? true : undefined
+									}
+									autoFocus
+									itemType="asd"
 									avatar={
 										msg.role === "user" ? undefined : (
 											<div className="p-2 bg-gray-500 rounded-full w-8 h-8 flex items-center justify-center">
