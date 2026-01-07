@@ -1,16 +1,53 @@
-import { Bubble, Sender, XProvider } from "@ant-design/x";
-import { useEffect, useState } from "react";
+import { Bubble, Sender, XProvider, type BubbleProps } from "@ant-design/x";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import PWABadge from "./PWABadge.tsx";
 import { useTheme } from "./hooks/useTheme.ts";
 import XMarkdown from "@ant-design/x-markdown";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import api from "./axios/index.tsx";
-import { Spin } from "antd";
+import { Spin, Typography } from "antd";
+
+// Хук для анимации печатания текста
+const useTypingText = (text: string, speed: number = 30) => {
+	const [displayedText, setDisplayedText] = useState("");
+
+	useEffect(() => {
+		if (!text) {
+			setDisplayedText("");
+			return;
+		}
+
+		let index = 0;
+		setDisplayedText("");
+
+		const interval = setInterval(() => {
+			if (index < text.length) {
+				setDisplayedText(text.slice(0, index + 1));
+				index++;
+			} else {
+				clearInterval(interval);
+			}
+		}, speed);
+
+		return () => clearInterval(interval);
+	}, [text, speed]);
+
+	return displayedText;
+};
+
+const renderMarkdown: BubbleProps["contentRender"] = (content) => {
+	return (
+		<Typography>
+			<XMarkdown content={content} />
+		</Typography>
+	);
+};
 
 function App() {
 	const [inputValue, setInputValue] = useState("");
 	const { theme, toggleTheme } = useTheme();
+	const messagesEndRef = useRef<HTMLDivElement>(null);
 
 	const chat_id = window.location.pathname.split("/")[1];
 
@@ -22,8 +59,19 @@ function App() {
 	});
 
 	const [messages, setMessages] = useState<
-		{ content: string; role: "user" | "ai"; key: string }[]
+		{ content: string; role: string; key: string }[]
 	>([]);
+
+	// Храним индекс последнего сообщения для анимации
+	const [animatingMessageIndex, setAnimatingMessageIndex] = useState<
+		number | null
+	>(null);
+	const displayedText = useTypingText(
+		animatingMessageIndex !== null && animatingMessageIndex >= 0
+			? messages[animatingMessageIndex]?.content || ""
+			: "",
+		10,
+	);
 
 	const { mutate, isPending, isSuccess } = useMutation({
 		mutationKey: ["askMutation"],
@@ -42,14 +90,20 @@ function App() {
 			});
 		},
 		onSuccess: (data) => {
-			setMessages((prev) => [
-				...prev,
-				{
-					content: data.data.answer,
-					role: "ai",
-					key: `ai_${prev.length}`,
-				},
-			]);
+
+			setMessages((prev) => {
+				const newMessages = [
+					...prev,
+					{
+						content: data.data.answer,
+						role: "ai",
+						key: `ai_${prev.length}`,
+					},
+				];
+				// Устанавливаем индекс последнего сообщения для анимации
+				setAnimatingMessageIndex(newMessages.length - 1);
+				return newMessages;
+			});
 		},
 	});
 
@@ -66,6 +120,11 @@ function App() {
 			]);
 		}
 	}, [chatSettings, messages.length]);
+
+	// Автоматический скролл к последнему сообщению
+	useEffect(() => {
+		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+	}, [messages, displayedText]);
 
 	if (settingsLoading) {
 		return (
@@ -108,12 +167,21 @@ function App() {
 								</div>
 							)}
 							<div className="flex flex-col p-4 gap-4 max-h-[calc(100vh-232px)] overflow-y-auto">
-								{messages.map((msg) => (
+								{messages.map((msg, index) => (
 									<Bubble
 										key={msg.key}
 										role={msg.role}
-										content={msg.content}
-										typing={msg.role === "ai" ? true : undefined}
+										content={
+											animatingMessageIndex === index
+												? displayedText
+												: msg.content
+										}
+										contentRender={renderMarkdown}
+										typing={
+											msg.role === "ai" && animatingMessageIndex === index
+												? true
+												: undefined
+										}
 										autoFocus
 										itemType="asd"
 										avatar={
@@ -128,9 +196,7 @@ function App() {
 											msg.role === "user" ? undefined : <div>AI footer</div>
 										}
 										placement={msg.role === "user" ? "end" : "start"}
-									>
-										<XMarkdown>{msg.content}</XMarkdown>
-									</Bubble>
+									/>
 								))}
 
 								{isPending && !isSuccess && (
@@ -148,6 +214,7 @@ function App() {
 										placement="start"
 									/>
 								)}
+								<div ref={messagesEndRef} />
 							</div>
 						</div>
 						<Sender
