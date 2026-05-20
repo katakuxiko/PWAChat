@@ -5,7 +5,9 @@ WORKDIR /app
 
 # Allow passing Vite env at build time: --build-arg VITE_BASE_URL=https://back.avxm.live
 ARG VITE_BASE_URL
+ARG VITE_BASE_CHAT_URL
 ENV VITE_BASE_URL=${VITE_BASE_URL}
+ENV VITE_BASE_CHAT_URL=${VITE_BASE_CHAT_URL}
 
 RUN apk add --no-cache git
 

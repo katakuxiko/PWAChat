@@ -91,8 +91,9 @@ function App() {
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 
 	const initialChatId = window.location.pathname.split("/")[1] || "";
+	// Prefer chatId from URL when present, otherwise fall back to localStorage
 	const [chatId, setChatId] = useState<string>(
-		() => localStorage.getItem("chat_id") || initialChatId,
+		() => initialChatId || localStorage.getItem("chat_id") || "",
 	);
 	const [token, setToken] = useState<string | null>(() =>
 		localStorage.getItem("chat_token"),
@@ -119,7 +120,7 @@ function App() {
 		animatingMessageIndex !== null && animatingMessageIndex >= 0
 			? messages[animatingMessageIndex]?.content || ""
 			: "",
-		10,
+		5,
 	);
 
 	useEffect(() => {
@@ -441,8 +442,11 @@ function App() {
 				onCancel={() => setShowLoginModal(false)}
 				footer={null}
 				destroyOnClose
+				// getContainer={false}
+				className="bg-white dark:bg-gray-800"
+				rootClassName="bg-white dark:bg-gray-800"
 			>
-				<div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md">
+				<div className="">
 					<Typography.Title level={3}>Вход в чат</Typography.Title>
 					<Form
 						layout="vertical"
@@ -495,7 +499,7 @@ function App() {
 							Войти
 						</Button>
 					</Form>
-					<Button type="dashed" className="mt-3" onClick={toggleTheme} block>
+					<Button type="primary" className="mt-3" onClick={toggleTheme} block>
 						{theme === "light" ? "🌙 Темная тема" : "☀️ Светлая тема"}
 					</Button>
 				</div>
