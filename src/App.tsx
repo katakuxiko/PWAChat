@@ -126,6 +126,8 @@ function App() {
 	const [inputValue, setInputValue] = useState("");
 	const { theme, toggleTheme } = useTheme();
 	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const messagesContainerRef = useRef<HTMLDivElement>(null);
+	const shouldAutoScrollRef = useRef(true);
 
 	const initialChatId = window.location.pathname.split("/")[1] || "";
 	// Prefer chatId from URL when present, otherwise fall back to localStorage
@@ -174,6 +176,19 @@ function App() {
 			: "",
 		5,
 	);
+
+	const isNearBottom = (element: HTMLDivElement) => {
+		const threshold = 96;
+		const distanceFromBottom =
+			element.scrollHeight - element.scrollTop - element.clientHeight;
+		return distanceFromBottom <= threshold;
+	};
+
+	const handleMessagesScroll = () => {
+		const element = messagesContainerRef.current;
+		if (!element) return;
+		shouldAutoScrollRef.current = isNearBottom(element);
+	};
 
 	useEffect(() => {
 		setAuthHeader(token);
@@ -270,7 +285,12 @@ function App() {
 	useEffect(() => {
 		const shouldScroll = messages.length > 0 || displayedText.length > 0;
 		if (!shouldScroll) return;
-		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+		if (!shouldAutoScrollRef.current) return;
+
+		messagesEndRef.current?.scrollIntoView({
+			behavior: displayedText.length > 0 ? "auto" : "smooth",
+			block: "end",
+		});
 	}, [messages, displayedText]);
 
 	useEffect(() => {
@@ -526,61 +546,68 @@ function App() {
 									)}
 								</div>
 							)}
-							<div className="flex min-w-0 flex-col p-4 gap-4 max-h-[calc(100vh-260px)] overflow-y-auto overflow-x-hidden">
+							<div
+								ref={messagesContainerRef}
+								onScroll={handleMessagesScroll}
+								className="flex min-w-0 flex-col p-4 gap-4 max-h-[calc(100vh-260px)] overflow-y-auto overflow-x-hidden"
+							>
 								{messages.map((msg, index) => (
-									<Bubble
-										key={msg.key}
-										className="max-w-full min-w-0 overflow-hidden"
-										role={msg.role}
-										content={
-											animatingMessageIndex === index
-												? displayedText
-												: msg.content
-										}
-										contentRender={renderMarkdown}
-										typing={
-											msg.role === "ai" && animatingMessageIndex === index
-												? true
-												: undefined
-										}
-										autoFocus
-										itemType="chat"
-										footer={
-											msg.role === "ai" && (msg.sources?.length ?? 0) > 0 ? (
-												<div className="mt-2 max-w-full min-w-0 overflow-hidden text-xs text-gray-600 dark:text-gray-300">
-													<div className="mb-1">Использованные PDF:</div>
-													<div className="flex flex-col gap-1 max-w-full">
-														{msg.sources?.map((source) => (
-															<Button
-																key={`${msg.key}_${source.DocID || source.DocName}`}
-																type="text"
-																size="small"
-																className="w-full max-w-full px-1! text-left! h-auto! overflow-hidden"
-																title={source.DocName || "Документ"}
-																onClick={() => openPdfViewer(source)}
-															>
-																<span className="inline-flex w-full min-w-0 items-center gap-1.5 text-left">
-																	<span aria-hidden="true">📄</span>
-																	<span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-																		{source.DocName || "Документ"}
-																	</span>
-																</span>
-															</Button>
-														))}
+									<div key={msg.key} className="max-w-full min-w-0">
+										<Bubble
+											className="max-w-full min-w-0 overflow-hidden"
+											role={msg.role}
+											content={
+												animatingMessageIndex === index
+													? displayedText
+													: msg.content
+											}
+											contentRender={renderMarkdown}
+											typing={
+												msg.role === "ai" && animatingMessageIndex === index
+													? true
+													: undefined
+											}
+											autoFocus
+											itemType="chat"
+											avatar={
+												msg.role === "user" ? undefined : (
+													<div className="p-2 bg-gray-500 rounded-full w-8 h-8 flex items-center justify-center">
+														AI
 													</div>
+												)
+											}
+											variant="filled"
+											placement={msg.role === "user" ? "end" : "start"}
+										/>
+										{msg.role === "ai" && (msg.sources?.length ?? 0) > 0 ? (
+											<div className="ml-10 mt-2 max-w-full min-w-0 overflow-hidden text-xs text-gray-600 dark:text-gray-300">
+												<div className="mb-1">Использованные PDF:</div>
+												<div className="flex flex-col gap-1 max-w-full">
+													{msg.sources?.map((source) => (
+														<button
+															key={`${msg.key}_${source.DocID || source.DocName}`}
+															type="button"
+															className="w-full max-w-full rounded px-1 py-1 text-left leading-5 hover:bg-black/5 dark:hover:bg-white/10"
+															title={source.DocName || "Документ"}
+															onClick={() => openPdfViewer(source)}
+														>
+															<span className="inline-flex w-full min-w-0 items-start gap-1.5 text-left">
+																<span
+																	aria-hidden="true"
+																	className="mt-0.5 shrink-0"
+																>
+																	📄
+																</span>
+																<span className="block min-w-0 flex-1 break-all whitespace-normal">
+																	{source.DocName || "Документ"}
+																</span>
+															</span>
+														</button>
+													))}
 												</div>
-											) : undefined
-										}
-										avatar={
-											msg.role === "user" ? undefined : (
-												<div className="p-2 bg-gray-500 rounded-full w-8 h-8 flex items-center justify-center">
-													AI
-												</div>
-											)
-										}
-										variant="filled"
-										placement={msg.role === "user" ? "end" : "start"}
-									/>
+											</div>
+										) : null}
+									</div>
 								))}
 
 								{(askMutation.isPending || sendMessageMutation.isPending) && (
@@ -610,6 +637,7 @@ function App() {
 									message.error("История чата не создана");
 									return;
 								}
+								shouldAutoScrollRef.current = true;
 								setMessages((prev) => [
 									...prev,
 									{
