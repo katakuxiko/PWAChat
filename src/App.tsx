@@ -11,6 +11,7 @@ import {
 	Button,
 	Form,
 	Input,
+	Select,
 	Spin,
 	Typography,
 	message,
@@ -98,14 +99,18 @@ function App() {
 	const [token, setToken] = useState<string | null>(() =>
 		localStorage.getItem("chat_token"),
 	);
-	const [historyId, setHistoryId] = useState<string | null>(() =>
-		localStorage.getItem("chat_history_id"),
-	);
+	const [historyId, setHistoryId] = useState<string | null>(null);
 	const [claims, setClaims] = useState<TokenClaims | null>(() =>
 		decodeClaims(localStorage.getItem("chat_token")),
 	);
 
 	const [showLoginModal, setShowLoginModal] = useState(false);
+	const [showChatPickerModal, setShowChatPickerModal] = useState<boolean>(
+		() => !initialChatId && !localStorage.getItem("chat_id"),
+	);
+	const [selectedChatId, setSelectedChatId] = useState<string>(
+		() => initialChatId || localStorage.getItem("chat_id") || "",
+	);
 
 	const hasChatIdFromUrl = Boolean(initialChatId);
 
@@ -137,24 +142,37 @@ function App() {
 		if (chatId) {
 			localStorage.setItem("chat_id", chatId);
 			window.history.replaceState({}, "", `/${chatId}`);
+			setShowChatPickerModal(false);
+			setSelectedChatId(chatId);
+		} else {
+			setShowChatPickerModal(true);
 		}
 	}, [chatId]);
+
+	const { data: chatsData, isLoading: chatsLoading } = useQuery({
+		queryKey: ["chats-for-picker"],
+		queryFn: () =>
+			api.instance.get<Array<{ id?: string; name?: string; descr?: string }>>(
+				"/public/chats",
+			),
+		enabled: showChatPickerModal,
+	});
+
+	const chatPickerOptions = (chatsData?.data ?? []).map((chat) => {
+		const label = chat.name?.trim() || `Чат ${chat.id?.slice(0, 8) ?? ""}`;
+		const descr = chat.descr?.trim();
+		return {
+			value: chat.id ?? "",
+			label: descr ? `${label} - ${descr}` : label,
+		};
+	});
 
 	useEffect(() => {
 		if (!claims?.chat_id || !chatId) return;
 		if (claims.chat_id !== chatId) {
 			setHistoryId(null);
-			localStorage.removeItem("chat_history_id");
 		}
 	}, [claims, chatId]);
-
-	useEffect(() => {
-		if (!historyId) {
-			localStorage.removeItem("chat_history_id");
-		} else {
-			localStorage.setItem("chat_history_id", historyId);
-		}
-	}, [historyId]);
 
 	const { data: chatSettings, isLoading: settingsLoading } = useQuery({
 		queryKey: ["chatSettings", chatId],
@@ -182,7 +200,6 @@ function App() {
 			const res = await api.instance.get(`/chats/${chatId}/history`);
 			return res.data as HistoryMessage[];
 		},
-		refetchInterval: 5000,
 	});
 
 	useEffect(() => {
@@ -326,6 +343,7 @@ function App() {
 							<Button
 								onClick={() => {
 									setToken(null);
+									setChatId("");
 									setHistoryId(null);
 									setMessages([]);
 								}}
@@ -360,7 +378,11 @@ function App() {
 											<Spin />
 										</div>
 									) : (
-										<Alert message="Создаётся история чата" type="info" />
+										<Alert
+											className="bg-blue-100 dark:bg-blue-700 text-black!"
+											message="Создаётся история чата"
+											type="info"
+										/>
 									)}
 								</div>
 							)}
@@ -442,7 +464,8 @@ function App() {
 				onCancel={() => setShowLoginModal(false)}
 				footer={null}
 				destroyOnClose
-				// getContainer={false}
+				getContainer={false}
+				classNames={"bg-red"}
 				className="bg-white dark:bg-gray-800"
 				rootClassName="bg-white dark:bg-gray-800"
 			>
@@ -503,6 +526,53 @@ function App() {
 						{theme === "light" ? "🌙 Темная тема" : "☀️ Светлая тема"}
 					</Button>
 				</div>
+			</Modal>
+			<Modal
+				open={showChatPickerModal}
+				title="Выбор чата"
+				closable={false}
+				maskClosable={false}
+				keyboard={false}
+				footer={[
+					<Button
+						key="continue"
+						type="primary"
+						disabled={!selectedChatId}
+						onClick={() => {
+							if (!selectedChatId) {
+								message.error("Выберите чат");
+								return;
+							}
+							setChatId(selectedChatId);
+							setMessages([]);
+							setHistoryId(null);
+							setShowChatPickerModal(false);
+						}}
+					>
+						Продолжить
+					</Button>,
+				]}
+			>
+				<Typography.Paragraph type="secondary">
+					Выберите чат из списка.
+				</Typography.Paragraph>
+				<Select
+					showSearch
+					placeholder="Найдите чат по названию или описанию"
+					value={selectedChatId || undefined}
+					onChange={setSelectedChatId}
+					loading={chatsLoading}
+					filterOption={(input, option) =>
+						String(option?.label ?? "")
+							.toLowerCase()
+							.includes(input.toLowerCase())
+					}
+					notFoundContent={
+						chatsLoading ? <Spin size="small" /> : "Чаты не найдены"
+					}
+					options={chatPickerOptions}
+					style={{ width: "100%" }}
+				/>
 			</Modal>
 			<PWABadge />
 		</>
