@@ -18,6 +18,42 @@ import {
 	Modal,
 } from "antd";
 
+interface AskContextItem {
+	DocID?: string;
+	DocName?: string;
+	Filepath?: string;
+}
+
+interface AskResponse {
+	answer?: string;
+	context?: AskContextItem[];
+}
+
+const getErrorMessage = (err: unknown, fallback: string) => {
+	if (
+		typeof err === "object" &&
+		err !== null &&
+		"response" in err &&
+		typeof (err as { response?: unknown }).response === "object" &&
+		(err as { response?: unknown }).response !== null
+	) {
+		const response = (err as { response?: { data?: { error?: string } } })
+			.response;
+		if (response?.data?.error) return response.data.error;
+	}
+
+	if (
+		typeof err === "object" &&
+		err !== null &&
+		"message" in err &&
+		typeof (err as { message?: unknown }).message === "string"
+	) {
+		return (err as { message: string }).message;
+	}
+
+	return fallback;
+};
+
 interface TokenClaims {
 	id?: string;
 	chat_id?: string;
@@ -80,7 +116,7 @@ const useTypingText = (text: string, speed: number = 30) => {
 
 const renderMarkdown: BubbleProps["contentRender"] = (content) => {
 	return (
-		<Typography>
+		<Typography className="max-w-full min-w-0 overflow-hidden wrap-break-word">
 			<XMarkdown content={content} />
 		</Typography>
 	);
@@ -115,8 +151,19 @@ function App() {
 	const hasChatIdFromUrl = Boolean(initialChatId);
 
 	const [messages, setMessages] = useState<
-		{ content: string; role: string; key: string; created?: string }[]
+		{
+			content: string;
+			role: string;
+			key: string;
+			created?: string;
+			sources?: AskContextItem[];
+		}[]
 	>([]);
+	const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+	const [pdfViewerLoading, setPdfViewerLoading] = useState(false);
+	const [pdfViewerError, setPdfViewerError] = useState<string | null>(null);
+	const [pdfViewerDocName, setPdfViewerDocName] = useState<string>("");
+	const [pdfViewerBlobUrl, setPdfViewerBlobUrl] = useState<string | null>(null);
 
 	const [animatingMessageIndex, setAnimatingMessageIndex] = useState<
 		number | null
@@ -221,8 +268,98 @@ function App() {
 	}, [historyData, historyId]);
 
 	useEffect(() => {
+		const shouldScroll = messages.length > 0 || displayedText.length > 0;
+		if (!shouldScroll) return;
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 	}, [messages, displayedText]);
+
+	useEffect(() => {
+		return () => {
+			if (pdfViewerBlobUrl) {
+				URL.revokeObjectURL(pdfViewerBlobUrl);
+			}
+		};
+	}, [pdfViewerBlobUrl]);
+
+	const getUniqueSources = (context?: AskContextItem[]) => {
+		if (!context?.length) return [];
+
+		const map = new Map<string, AskContextItem>();
+		for (const item of context) {
+			const key = item.DocID || item.DocName || item.Filepath;
+			if (!key || map.has(key)) continue;
+			map.set(key, item);
+		}
+
+		return Array.from(map.values());
+	};
+
+	const closePdfViewer = () => {
+		setPdfViewerOpen(false);
+		setPdfViewerError(null);
+		setPdfViewerLoading(false);
+		if (pdfViewerBlobUrl) {
+			URL.revokeObjectURL(pdfViewerBlobUrl);
+		}
+		setPdfViewerBlobUrl(null);
+	};
+
+	const openPdfViewer = async (source: AskContextItem) => {
+		if (!source.DocID) {
+			message.error("Не удалось открыть документ: отсутствует ID");
+			return;
+		}
+
+		const effectiveToken = token || localStorage.getItem("chat_token");
+		if (!effectiveToken) {
+			message.warning("Для просмотра PDF выполните вход в чат");
+			setShowLoginModal(true);
+			return;
+		}
+
+		setPdfViewerDocName(source.DocName || "document.pdf");
+		setPdfViewerOpen(true);
+		setPdfViewerLoading(true);
+		setPdfViewerError(null);
+
+		if (pdfViewerBlobUrl) {
+			URL.revokeObjectURL(pdfViewerBlobUrl);
+			setPdfViewerBlobUrl(null);
+		}
+
+		try {
+			const res = await api.instance.get(
+				`/documents/${source.DocID}/download`,
+				{
+					responseType: "blob",
+					headers: {
+						Authorization: `Bearer ${effectiveToken}`,
+					},
+				},
+			);
+			const blobUrl = URL.createObjectURL(res.data as Blob);
+			setPdfViewerBlobUrl(blobUrl);
+		} catch (err: unknown) {
+			const status =
+				typeof err === "object" &&
+				err !== null &&
+				"response" in err &&
+				typeof (err as { response?: { status?: unknown } }).response?.status ===
+					"number"
+					? (err as { response?: { status?: number } }).response?.status
+					: undefined;
+
+			if (status === 401) {
+				setPdfViewerError("Нет доступа к документу. Войдите в чат заново.");
+				setShowLoginModal(true);
+				return;
+			}
+
+			setPdfViewerError(getErrorMessage(err, "Не удалось загрузить PDF"));
+		} finally {
+			setPdfViewerLoading(false);
+		}
+	};
 
 	const loginMutation = useMutation({
 		mutationFn: async (payload: {
@@ -239,18 +376,17 @@ function App() {
 			setClaims(decodeClaims(res.data.token));
 			setShowLoginModal(false);
 		},
-		onError: (err: any) => {
-			const detail =
-				err?.response?.data?.error ||
-				err?.message ||
-				"Не удалось авторизоваться";
+		onError: (err: unknown) => {
+			const detail = getErrorMessage(err, "Не удалось авторизоваться");
 			message.error(detail);
 		},
 	});
 
 	const createHistoryMutation = useMutation({
 		mutationFn: async (payload: { chat_id: string; user_id?: string }) => {
-			const postData: any = { chat_id: payload.chat_id };
+			const postData: { chat_id: string; user_id?: string } = {
+				chat_id: payload.chat_id,
+			};
 			if (payload.user_id) postData.user_id = payload.user_id;
 			return api.instance.post("/chat_histories", postData);
 		},
@@ -280,15 +416,18 @@ function App() {
 			});
 		},
 		onSuccess: (data) => {
+			const response = (data.data ?? {}) as AskResponse;
+			const sources = getUniqueSources(response.context);
 			setMessages((prev) => {
 				const nextIndex = prev.length;
 				setAnimatingMessageIndex(nextIndex);
 				return [
 					...prev,
 					{
-						content: data.data.answer,
+						content: response.answer || "",
 						role: "ai",
 						key: `ai_${nextIndex}`,
+						sources,
 					},
 				];
 			});
@@ -309,7 +448,7 @@ function App() {
 
 			await api.instance.post("/messages", {
 				chat_history_id: historyId,
-				text: answer.data.answer,
+				text: ((answer.data ?? {}) as AskResponse).answer,
 				role: "assistant",
 			});
 		},
@@ -386,10 +525,11 @@ function App() {
 									)}
 								</div>
 							)}
-							<div className="flex flex-col p-4 gap-4 max-h-[calc(100vh-260px)] overflow-y-auto">
+							<div className="flex min-w-0 flex-col p-4 gap-4 max-h-[calc(100vh-260px)] overflow-y-auto overflow-x-hidden">
 								{messages.map((msg, index) => (
 									<Bubble
 										key={msg.key}
+										className="max-w-full min-w-0 overflow-hidden"
 										role={msg.role}
 										content={
 											animatingMessageIndex === index
@@ -404,6 +544,32 @@ function App() {
 										}
 										autoFocus
 										itemType="chat"
+										footer={
+											msg.role === "ai" && (msg.sources?.length ?? 0) > 0 ? (
+												<div className="mt-2 max-w-full min-w-0 overflow-hidden text-xs text-gray-600 dark:text-gray-300">
+													<div className="mb-1">Использованные PDF:</div>
+													<div className="flex flex-col gap-1 max-w-full">
+														{msg.sources?.map((source) => (
+															<Button
+																key={`${msg.key}_${source.DocID || source.DocName}`}
+																type="text"
+																size="small"
+																className="w-full max-w-full px-1! text-left! h-auto! overflow-hidden"
+																title={source.DocName || "Документ"}
+																onClick={() => openPdfViewer(source)}
+															>
+																<span className="inline-flex w-full min-w-0 items-center gap-1.5 text-left">
+																	<span aria-hidden="true">📄</span>
+																	<span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+																		{source.DocName || "Документ"}
+																	</span>
+																</span>
+															</Button>
+														))}
+													</div>
+												</div>
+											) : undefined
+										}
 										avatar={
 											msg.role === "user" ? undefined : (
 												<div className="p-2 bg-gray-500 rounded-full w-8 h-8 flex items-center justify-center">
@@ -525,6 +691,53 @@ function App() {
 					<Button type="primary" className="mt-3" onClick={toggleTheme} block>
 						{theme === "light" ? "🌙 Темная тема" : "☀️ Светлая тема"}
 					</Button>
+				</div>
+			</Modal>
+			<Modal
+				open={pdfViewerOpen}
+				onCancel={closePdfViewer}
+				title={pdfViewerDocName || "Просмотр PDF"}
+				width={1000}
+				footer={[
+					<Button key="close" onClick={closePdfViewer}>
+						Закрыть
+					</Button>,
+					<Button
+						key="download"
+						type="primary"
+						disabled={!pdfViewerBlobUrl}
+						onClick={() => {
+							if (!pdfViewerBlobUrl) return;
+							const link = document.createElement("a");
+							link.href = pdfViewerBlobUrl;
+							link.download = pdfViewerDocName || "document.pdf";
+							document.body.appendChild(link);
+							link.click();
+							link.remove();
+						}}
+					>
+						Скачать
+					</Button>,
+				]}
+			>
+				<div className="h-[70vh] border border-gray-200 rounded-lg overflow-hidden bg-white">
+					{pdfViewerLoading && (
+						<div className="h-full flex items-center justify-center">
+							<Spin />
+						</div>
+					)}
+					{!pdfViewerLoading && pdfViewerError && (
+						<div className="h-full flex items-center justify-center text-red-500 px-4 text-center">
+							{pdfViewerError}
+						</div>
+					)}
+					{!pdfViewerLoading && !pdfViewerError && pdfViewerBlobUrl && (
+						<iframe
+							title={pdfViewerDocName || "PDF Viewer"}
+							src={pdfViewerBlobUrl}
+							className="w-full h-full"
+						/>
+					)}
 				</div>
 			</Modal>
 			<Modal
