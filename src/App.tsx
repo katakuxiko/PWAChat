@@ -408,9 +408,10 @@ function App() {
 	const askMutation = useMutation({
 		mutationKey: ["askMutation"],
 		mutationFn: async (query: string) => {
-			return api.ask.postAsk({
+			return api.instance.post("/ask", {
 				query,
 				chat_id: chatId,
+				chat_history_id: historyId,
 				model: chatSettings?.data.settings?.model,
 				settings: chatSettings?.data.settings,
 			});
