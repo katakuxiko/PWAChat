@@ -457,12 +457,17 @@ function App() {
 	const askMutation = useMutation({
 		mutationKey: ["askMutation"],
 		mutationFn: async (query: string) => {
+			const requestSettings = {
+				...(chatSettings?.data.settings ?? {}),
+				enableHistory: true,
+			};
+
 			return api.instance.post("/ask", {
 				query,
 				chat_id: chatId,
 				chat_history_id: historyId,
 				model: chatSettings?.data.settings?.model,
-				settings: chatSettings?.data.settings,
+				settings: requestSettings,
 			});
 		},
 		onSuccess: (data) => {
