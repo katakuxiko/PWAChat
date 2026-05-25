@@ -6,9 +6,11 @@ import { useTheme } from "./hooks/useTheme.ts";
 import XMarkdown from "@ant-design/x-markdown";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import api, { setAuthHeader } from "./axios/index.tsx";
+import PdfViewer from "./components/PdfViewer.tsx";
 import {
 	Alert,
 	Button,
+	Drawer,
 	Form,
 	Input,
 	Select,
@@ -122,12 +124,17 @@ const renderMarkdown: BubbleProps["contentRender"] = (content) => {
 	);
 };
 
+const MOBILE_DRAWER_BREAKPOINT = 768;
+
 function App() {
 	const [inputValue, setInputValue] = useState("");
 	const { theme, toggleTheme } = useTheme();
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const messagesContainerRef = useRef<HTMLDivElement>(null);
 	const shouldAutoScrollRef = useRef(true);
+	const [isMobileViewport, setIsMobileViewport] = useState<boolean>(
+		() => window.innerWidth < MOBILE_DRAWER_BREAKPOINT,
+	);
 
 	const initialChatId = window.location.pathname.split("/")[1] || "";
 	// Prefer chatId from URL when present, otherwise fall back to localStorage
@@ -162,10 +169,10 @@ function App() {
 		}[]
 	>([]);
 	const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
-	const [pdfViewerLoading, setPdfViewerLoading] = useState(false);
-	const [pdfViewerError, setPdfViewerError] = useState<string | null>(null);
+	const [pdfViewerDocId, setPdfViewerDocId] = useState<string | null>(null);
 	const [pdfViewerDocName, setPdfViewerDocName] = useState<string>("");
-	const [pdfViewerBlobUrl, setPdfViewerBlobUrl] = useState<string | null>(null);
+	const [pdfViewerUrl, setPdfViewerUrl] = useState<string | null>(null);
+	const [pdfDownloadLoading, setPdfDownloadLoading] = useState(false);
 
 	const [animatingMessageIndex, setAnimatingMessageIndex] = useState<
 		number | null
@@ -189,6 +196,24 @@ function App() {
 		if (!element) return;
 		shouldAutoScrollRef.current = isNearBottom(element);
 	};
+
+	useEffect(() => {
+		const mediaQuery = window.matchMedia(
+			`(max-width: ${MOBILE_DRAWER_BREAKPOINT - 1}px)`,
+		);
+
+		const updateViewport = (event: MediaQueryList | MediaQueryListEvent) => {
+			setIsMobileViewport(event.matches);
+		};
+
+		updateViewport(mediaQuery);
+		const handleChange = (event: MediaQueryListEvent) => updateViewport(event);
+		mediaQuery.addEventListener("change", handleChange);
+
+		return () => {
+			mediaQuery.removeEventListener("change", handleChange);
+		};
+	}, []);
 
 	useEffect(() => {
 		setAuthHeader(token);
@@ -293,14 +318,6 @@ function App() {
 		});
 	}, [messages, displayedText]);
 
-	useEffect(() => {
-		return () => {
-			if (pdfViewerBlobUrl) {
-				URL.revokeObjectURL(pdfViewerBlobUrl);
-			}
-		};
-	}, [pdfViewerBlobUrl]);
-
 	const getUniqueSources = (context?: AskContextItem[]) => {
 		if (!context?.length) return [];
 
@@ -316,15 +333,13 @@ function App() {
 
 	const closePdfViewer = () => {
 		setPdfViewerOpen(false);
-		setPdfViewerError(null);
-		setPdfViewerLoading(false);
-		if (pdfViewerBlobUrl) {
-			URL.revokeObjectURL(pdfViewerBlobUrl);
-		}
-		setPdfViewerBlobUrl(null);
+		setPdfViewerDocId(null);
+		setPdfViewerDocName("");
+		setPdfViewerUrl(null);
+		setPdfDownloadLoading(false);
 	};
 
-	const openPdfViewer = async (source: AskContextItem) => {
+	const openPdfViewer = (source: AskContextItem) => {
 		if (!source.DocID) {
 			message.error("Не удалось открыть документ: отсутствует ID");
 			return;
@@ -337,19 +352,27 @@ function App() {
 			return;
 		}
 
+		setPdfViewerDocId(source.DocID);
 		setPdfViewerDocName(source.DocName || "document.pdf");
+		setPdfViewerUrl(`documents/${source.DocID}/download`);
 		setPdfViewerOpen(true);
-		setPdfViewerLoading(true);
-		setPdfViewerError(null);
+	};
 
-		if (pdfViewerBlobUrl) {
-			URL.revokeObjectURL(pdfViewerBlobUrl);
-			setPdfViewerBlobUrl(null);
+	const downloadPdfViewerDocument = async () => {
+		if (!pdfViewerDocId) return;
+
+		const effectiveToken = token || localStorage.getItem("chat_token");
+		if (!effectiveToken) {
+			message.warning("Для скачивания PDF выполните вход в чат");
+			setShowLoginModal(true);
+			return;
 		}
+
+		setPdfDownloadLoading(true);
 
 		try {
 			const res = await api.instance.get(
-				`/documents/${source.DocID}/download`,
+				`/documents/${pdfViewerDocId}/download`,
 				{
 					responseType: "blob",
 					headers: {
@@ -358,7 +381,13 @@ function App() {
 				},
 			);
 			const blobUrl = URL.createObjectURL(res.data as Blob);
-			setPdfViewerBlobUrl(blobUrl);
+			const link = document.createElement("a");
+			link.href = blobUrl;
+			link.download = pdfViewerDocName || "document.pdf";
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			URL.revokeObjectURL(blobUrl);
 		} catch (err: unknown) {
 			const status =
 				typeof err === "object" &&
@@ -370,14 +399,14 @@ function App() {
 					: undefined;
 
 			if (status === 401) {
-				setPdfViewerError("Нет доступа к документу. Войдите в чат заново.");
+				message.error("Нет доступа к документу. Войдите в чат заново.");
 				setShowLoginModal(true);
 				return;
 			}
 
-			setPdfViewerError(getErrorMessage(err, "Не удалось загрузить PDF"));
+			message.error(getErrorMessage(err, "Не удалось скачать PDF"));
 		} finally {
-			setPdfViewerLoading(false);
+			setPdfDownloadLoading(false);
 		}
 	};
 
@@ -722,53 +751,51 @@ function App() {
 					</Button>
 				</div>
 			</Modal>
-			<Modal
+			<Drawer
 				open={pdfViewerOpen}
-				onCancel={closePdfViewer}
+				onClose={closePdfViewer}
+				destroyOnClose
+				placement="right"
 				title={pdfViewerDocName || "Просмотр PDF"}
-				width={1000}
-				footer={[
-					<Button key="close" onClick={closePdfViewer}>
-						Закрыть
-					</Button>,
-					<Button
-						key="download"
-						type="primary"
-						disabled={!pdfViewerBlobUrl}
-						onClick={() => {
-							if (!pdfViewerBlobUrl) return;
-							const link = document.createElement("a");
-							link.href = pdfViewerBlobUrl;
-							link.download = pdfViewerDocName || "document.pdf";
-							document.body.appendChild(link);
-							link.click();
-							link.remove();
-						}}
-					>
-						Скачать
-					</Button>,
-				]}
+				width={isMobileViewport ? "100vw" : "60vw"}
+				styles={{ body: { padding: 8 } }}
+				footer={
+					<div className="flex items-center justify-end gap-3">
+						<Button key="close" onClick={closePdfViewer}>
+							Закрыть
+						</Button>
+						<Button
+							key="download"
+							type="primary"
+							disabled={!pdfViewerDocId}
+							loading={pdfDownloadLoading}
+							onClick={downloadPdfViewerDocument}
+						>
+							Скачать
+						</Button>
+					</div>
+				}
 			>
-				<div className="h-[70vh] border border-gray-200 rounded-lg overflow-hidden bg-white">
-					{pdfViewerLoading && (
-						<div className="h-full flex items-center justify-center">
-							<Spin />
-						</div>
-					)}
-					{!pdfViewerLoading && pdfViewerError && (
-						<div className="h-full flex items-center justify-center text-red-500 px-4 text-center">
-							{pdfViewerError}
-						</div>
-					)}
-					{!pdfViewerLoading && !pdfViewerError && pdfViewerBlobUrl && (
-						<iframe
-							title={pdfViewerDocName || "PDF Viewer"}
-							src={pdfViewerBlobUrl}
-							className="w-full h-full"
+				<div className="h-[calc(100vh-170px)]">
+					{pdfViewerUrl ? (
+						<PdfViewer
+							key={pdfViewerUrl}
+							url={pdfViewerUrl}
+							token={token || undefined}
+							onUnauthorized={() => {
+								message.warning(
+									"Нет доступа к документу. Войдите в чат заново.",
+								);
+								setShowLoginModal(true);
+							}}
 						/>
+					) : (
+						<div className="h-full flex items-center justify-center text-gray-500">
+							Документ не выбран
+						</div>
 					)}
 				</div>
-			</Modal>
+			</Drawer>
 			<Modal
 				open={showChatPickerModal}
 				title="Выбор чата"
