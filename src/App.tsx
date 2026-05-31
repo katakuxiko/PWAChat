@@ -1015,7 +1015,7 @@ function App() {
 				onClose={closePdfViewer}
 				destroyOnClose
 				placement="right"
-				title={pdfViewerDocName || "Просмотр PDF"}
+				title={<div className="text-lg font-semibold text-ellipsis max-w-[calc(100vw-64px)] overflow-clip">{pdfViewerDocName || "Просмотр PDF"}</div>}
 				width={isMobileViewport ? "100vw" : "60vw"}
 				styles={{ body: { padding: 8 } }}
 				footer={
