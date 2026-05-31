@@ -16,7 +16,9 @@
 }
 
 .chat-message .ant-bubble {
-	transition: transform 180ms ease, box-shadow 220ms ease;
+	transition:
+		transform 180ms ease,
+		box-shadow 220ms ease;
 }
 
 .chat-message:hover .ant-bubble {
