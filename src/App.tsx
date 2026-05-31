@@ -111,7 +111,10 @@ const streamAskQuestion = async ({
 		let errorMessage = `Ошибка запроса: ${response.status}`;
 		try {
 			const errorData = (await response.json()) as { error?: unknown };
-			if (typeof errorData.error === "string" && errorData.error.trim() !== "") {
+			if (
+				typeof errorData.error === "string" &&
+				errorData.error.trim() !== ""
+			) {
 				errorMessage = errorData.error;
 			}
 		} catch {
@@ -161,11 +164,12 @@ const streamAskQuestion = async ({
 		}
 
 		if (event === "delta") {
-			const delta = typeof payload.answer === "string"
-				? payload.answer
-				: typeof (payload as { delta?: unknown }).delta === "string"
-					? ((payload as { delta?: string }).delta ?? "")
-					: "";
+			const delta =
+				typeof payload.answer === "string"
+					? payload.answer
+					: typeof (payload as { delta?: unknown }).delta === "string"
+						? ((payload as { delta?: string }).delta ?? "")
+						: "";
 			if (delta !== "") {
 				accumulatedAnswer += delta;
 				onDelta(delta);
@@ -674,9 +678,7 @@ function App() {
 				});
 				throw err;
 			} finally {
-				setStreamingMessageKey((prev) =>
-					prev === aiMessageKey ? null : prev,
-				);
+				setStreamingMessageKey((prev) => (prev === aiMessageKey ? null : prev));
 			}
 		},
 		onError: (err: unknown) => {
