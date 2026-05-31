@@ -283,7 +283,7 @@ const decodeClaims = (token: string | null): TokenClaims | null => {
 
 const renderMarkdown: BubbleProps["contentRender"] = (content) => {
 	return (
-		<Typography className="max-w-full min-w-0 overflow-hidden wrap-break-word">
+		<Typography className="chat-markdown max-w-full min-w-0 overflow-hidden wrap-break-word">
 			<XMarkdown content={content} />
 		</Typography>
 	);
@@ -497,6 +497,14 @@ function App() {
 		setPdfDownloadLoading(false);
 	};
 
+	const getPdfDownloadPath = (docId: string, authToken: string | null) => {
+		if (authToken) {
+			return `/documents/${docId}/download`;
+		}
+
+		return `/public/documents/${docId}/download`;
+	};
+
 	const openPdfViewer = (source: AskContextItem) => {
 		if (!source.DocID) {
 			message.error("Не удалось открыть документ: отсутствует ID");
@@ -504,15 +512,10 @@ function App() {
 		}
 
 		const effectiveToken = token || localStorage.getItem("chat_token");
-		if (!effectiveToken) {
-			message.warning("Для просмотра PDF выполните вход в чат");
-			setShowLoginModal(true);
-			return;
-		}
 
 		setPdfViewerDocId(source.DocID);
 		setPdfViewerDocName(source.DocName || "document.pdf");
-		setPdfViewerUrl(`documents/${source.DocID}/download`);
+		setPdfViewerUrl(getPdfDownloadPath(source.DocID, effectiveToken));
 		setPdfViewerOpen(true);
 	};
 
@@ -520,24 +523,19 @@ function App() {
 		if (!pdfViewerDocId) return;
 
 		const effectiveToken = token || localStorage.getItem("chat_token");
-		if (!effectiveToken) {
-			message.warning("Для скачивания PDF выполните вход в чат");
-			setShowLoginModal(true);
-			return;
-		}
+		const downloadPath = getPdfDownloadPath(pdfViewerDocId, effectiveToken);
 
 		setPdfDownloadLoading(true);
 
 		try {
-			const res = await api.instance.get(
-				`/documents/${pdfViewerDocId}/download`,
-				{
-					responseType: "blob",
-					headers: {
-						Authorization: `Bearer ${effectiveToken}`,
-					},
-				},
-			);
+			const res = await api.instance.get(downloadPath, {
+				responseType: "blob",
+				headers: effectiveToken
+					? {
+							Authorization: `Bearer ${effectiveToken}`,
+						}
+					: undefined,
+			});
 			const blobUrl = URL.createObjectURL(res.data as Blob);
 			const link = document.createElement("a");
 			link.href = blobUrl;
@@ -559,6 +557,13 @@ function App() {
 			if (status === 401) {
 				message.error("Нет доступа к документу. Войдите в чат заново.");
 				setShowLoginModal(true);
+				return;
+			}
+
+			if (status === 403 && !effectiveToken) {
+				message.error(
+					"Документ недоступен без авторизации: разрешён только для пользователей с правами.",
+				);
 				return;
 			}
 
@@ -725,42 +730,51 @@ function App() {
 				}}
 			>
 				<div className="min-h-screen h-full flex flex-col items-center bg-gray-100 dark:bg-gray-900">
-					<div className="flex gap-2 mt-4">
-						<Button type="primary" className="text-black" onClick={toggleTheme}>
-							{theme === "light" ? "🌙 Темная тема" : "☀️ Светлая тема"}
-						</Button>
-						{token ? (
-							<Button
-								onClick={() => {
-									setToken(null);
-									setChatId("");
-									setHistoryId(null);
-									setMessages([]);
-								}}
-								type="primary"
-							>
-								Выйти
-							</Button>
-						) : (
-							<Button type="primary" onClick={() => setShowLoginModal(true)}>
-								Войти
-							</Button>
-						)}
-					</div>
-					<div className="h-[calc(100vh-120px)] flex flex-col justify-between bg-white dark:bg-gray-800 max-w-lg w-full m-4 mb-0 rounded-lg shadow-lg transition-colors">
-						<div>
-							{chatSettings && (
-								<div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-									<h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-										{chatSettings.data.name}
-									</h2>
-									{chatSettings.data.descr && (
-										<p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-											{chatSettings.data.descr}
-										</p>
-									)}
+					<div className="h-screen md:h-[calc(100vh-2rem)] flex flex-col bg-white dark:bg-gray-800 max-w-lg w-full mx-4 md:mt-4 mb-0 md:rounded-lg shadow-lg transition-colors">
+						<div className="flex min-h-0 flex-1 flex-col">
+							<div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+								<div className="flex items-start justify-between gap-3">
+									<div className="min-w-0">
+										<h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
+											{chatSettings?.data.name || "Чат"}
+										</h2>
+										{chatSettings?.data.descr && (
+											<p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+												{chatSettings.data.descr}
+											</p>
+										)}
+									</div>
+									<div className="flex items-center gap-2 shrink-0">
+										<Button
+											type="primary"
+											className="text-black whitespace-nowrap"
+											onClick={toggleTheme}
+										>
+											{theme === "light" ? "🌙 Тема" : "☀️ Тема"}
+										</Button>
+										{token ? (
+											<Button
+												onClick={() => {
+													setToken(null);
+													setChatId("");
+													setHistoryId(null);
+													setMessages([]);
+												}}
+												type="primary"
+											>
+												Выйти
+											</Button>
+										) : (
+											<Button
+												type="primary"
+												onClick={() => setShowLoginModal(true)}
+											>
+												Войти
+											</Button>
+										)}
+									</div>
 								</div>
-							)}
+							</div>
 							{!historyId && (
 								<div className="px-4 py-3">
 									{createHistoryMutation.isPending ? (
@@ -779,7 +793,7 @@ function App() {
 							<div
 								ref={messagesContainerRef}
 								onScroll={handleMessagesScroll}
-								className="flex min-w-0 flex-col p-4 gap-4 max-h-[calc(100vh-260px)] overflow-y-auto overflow-x-hidden"
+								className="flex min-w-0 flex-1 min-h-0 flex-col p-4 gap-4 overflow-y-auto overflow-x-hidden"
 							>
 								{messages.map((msg) => {
 									const isStreamingPlaceholder =

@@ -1,0 +1,64 @@
+.chat-markdown {
+	line-height: 1.45;
+	word-break: break-word;
+}
+
+.chat-markdown p {
+	margin: 0.2rem 0;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+	margin: 0.25rem 0;
+	padding-left: 1.05rem;
+}
+
+.chat-markdown li {
+	margin: 0.1rem 0;
+	padding-left: 0.05rem;
+}
+
+.chat-markdown li > p {
+	margin: 0.1rem 0;
+}
+
+.chat-markdown ul ul,
+.chat-markdown ol ol,
+.chat-markdown ul ol,
+.chat-markdown ol ul {
+	margin: 0.12rem 0;
+	padding-left: 0.9rem;
+}
+
+@media (max-width: 767px) {
+	.chat-markdown {
+		line-height: 1.35;
+	}
+
+	.chat-markdown p {
+		margin: 0.2rem 0 !important;
+	}
+
+	.chat-markdown ul,
+	.chat-markdown ol {
+		margin: 0.16rem 0 !important;
+		padding-left: 0.85rem !important;
+	}
+
+	.chat-markdown li {
+		margin: 0.2rem 0 !important;
+		padding-left: 0 !important;
+	}
+
+	.chat-markdown li > p {
+		margin: 0.06rem 0 !important;
+	}
+
+	.chat-markdown ul ul,
+	.chat-markdown ol ol,
+	.chat-markdown ul ol,
+	.chat-markdown ol ul {
+		margin: 0.08rem 0 !important;
+		padding-left: 1rem !important;
+	}
+}
