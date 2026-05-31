@@ -3,7 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import PWABadge from "./PWABadge.tsx";
 import { useTheme } from "./hooks/useTheme.ts";
-import XMarkdown from "@ant-design/x-markdown";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import api, { setAuthHeader } from "./axios/index.tsx";
 import PdfViewer from "./components/PdfViewer.tsx";
@@ -281,10 +284,32 @@ const decodeClaims = (token: string | null): TokenClaims | null => {
 	}
 };
 
+const normalizeMathDelimiters = (text: string): string => {
+	return text
+		.replace(/\\\[([\s\S]*?)\\\]/g, (_, expression: string) => {
+			const trimmed = expression.trim();
+			return trimmed ? `\n$$\n${trimmed}\n$$\n` : "";
+		})
+		.replace(/\\\(([^\n]*?)\\\)/g, (_, expression: string) => {
+			const trimmed = expression.trim();
+			return trimmed ? `$${trimmed}$` : "";
+		});
+};
+
 const renderMarkdown: BubbleProps["contentRender"] = (content) => {
+	const markdownText =
+		typeof content === "string" ? content : String(content ?? "");
+
 	return (
 		<Typography className="chat-markdown max-w-full min-w-0 overflow-hidden wrap-break-word">
-			<XMarkdown content={content} />
+			<div className="chat-markdown-content">
+				<ReactMarkdown
+					remarkPlugins={[remarkGfm, remarkMath]}
+					rehypePlugins={[rehypeKatex]}
+				>
+					{normalizeMathDelimiters(markdownText)}
+				</ReactMarkdown>
+			</div>
 		</Typography>
 	);
 };
@@ -802,7 +827,14 @@ function App() {
 										msg.content.trim() === "";
 
 									return (
-										<div key={msg.key} className="max-w-full min-w-0">
+										<div
+											key={msg.key}
+											className={`chat-message max-w-full min-w-0 ${
+												msg.role === "user"
+													? "chat-message-user"
+													: "chat-message-ai"
+											}`}
+										>
 											<Bubble
 												className="max-w-full min-w-0 overflow-hidden"
 												role={msg.role}
