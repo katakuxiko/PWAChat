@@ -31,6 +31,195 @@ interface AskResponse {
 	context?: AskContextItem[];
 }
 
+interface AskStreamRequest {
+	query: string;
+	chatID: string;
+	chatHistoryID: string | null;
+	model?: string;
+	settings?: Record<string, unknown>;
+	token: string | null;
+	onDelta: (delta: string) => void;
+}
+
+interface AskDonePayload {
+	answer?: unknown;
+	context?: unknown;
+	error?: unknown;
+}
+
+const parseSSEEventBlock = (block: string): { event: string; data: string } => {
+	let event = "message";
+	const dataLines: string[] = [];
+
+	for (const line of block.split("\n")) {
+		if (!line) {
+			continue;
+		}
+		if (line.startsWith("event:")) {
+			event = line.slice(6).trim();
+			continue;
+		}
+		if (line.startsWith("data:")) {
+			dataLines.push(line.slice(5).trimStart());
+		}
+	}
+
+	return { event, data: dataLines.join("\n") };
+};
+
+const parseContextItems = (value: unknown): AskContextItem[] => {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	return value.filter(
+		(item) => typeof item === "object" && item !== null,
+	) as AskContextItem[];
+};
+
+const streamAskQuestion = async ({
+	query,
+	chatID,
+	chatHistoryID,
+	model,
+	settings,
+	token,
+	onDelta,
+}: AskStreamRequest): Promise<AskResponse> => {
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+		Accept: "text/event-stream",
+	};
+	if (token) {
+		headers.Authorization = `Bearer ${token}`;
+	}
+
+	const askURL = api.instance.getUri({ url: "/ask" });
+	const response = await fetch(askURL, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			query,
+			chat_id: chatID,
+			chat_history_id: chatHistoryID ?? undefined,
+			model,
+			settings,
+			stream: true,
+		}),
+	});
+
+	if (!response.ok) {
+		let errorMessage = `Ошибка запроса: ${response.status}`;
+		try {
+			const errorData = (await response.json()) as { error?: unknown };
+			if (typeof errorData.error === "string" && errorData.error.trim() !== "") {
+				errorMessage = errorData.error;
+			}
+		} catch {
+			// ignore parse error and return status message
+		}
+		throw new Error(errorMessage);
+	}
+
+	const contentType = response.headers.get("content-type") ?? "";
+	if (!contentType.includes("text/event-stream")) {
+		const fallback = (await response.json()) as AskResponse & {
+			error?: unknown;
+		};
+		if (typeof fallback.error === "string" && fallback.error.trim() !== "") {
+			throw new Error(fallback.error);
+		}
+		return {
+			answer: typeof fallback.answer === "string" ? fallback.answer : "",
+			context: parseContextItems(fallback.context),
+		};
+	}
+
+	const reader = response.body?.getReader();
+	if (!reader) {
+		throw new Error("Пустой поток ответа");
+	}
+
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let accumulatedAnswer = "";
+	let doneAnswer = "";
+	let doneContext: AskContextItem[] = [];
+
+	const handleEventBlock = (rawBlock: string) => {
+		if (rawBlock.trim() === "") {
+			return;
+		}
+
+		const { event, data } = parseSSEEventBlock(rawBlock);
+		let payload: AskDonePayload = {};
+		if (data) {
+			try {
+				payload = JSON.parse(data) as AskDonePayload;
+			} catch {
+				payload = {};
+			}
+		}
+
+		if (event === "delta") {
+			const delta = typeof payload.answer === "string"
+				? payload.answer
+				: typeof (payload as { delta?: unknown }).delta === "string"
+					? ((payload as { delta?: string }).delta ?? "")
+					: "";
+			if (delta !== "") {
+				accumulatedAnswer += delta;
+				onDelta(delta);
+			}
+			return;
+		}
+
+		if (event === "done") {
+			doneAnswer = typeof payload.answer === "string" ? payload.answer : "";
+			doneContext = parseContextItems(payload.context);
+			return;
+		}
+
+		if (event === "error") {
+			const errorText =
+				typeof payload.error === "string" && payload.error.trim() !== ""
+					? payload.error
+					: "Ошибка стриминга ответа";
+			throw new Error(errorText);
+		}
+	};
+
+	while (true) {
+		const { value, done } = await reader.read();
+		if (done) {
+			break;
+		}
+
+		buffer += decoder.decode(value, { stream: true });
+		buffer = buffer.replace(/\r/g, "");
+
+		let separatorIndex = buffer.indexOf("\n\n");
+		for (; separatorIndex !== -1; separatorIndex = buffer.indexOf("\n\n")) {
+			const block = buffer.slice(0, separatorIndex);
+			buffer = buffer.slice(separatorIndex + 2);
+			handleEventBlock(block);
+		}
+	}
+
+	const flushChunk = decoder.decode();
+	if (flushChunk) {
+		buffer += flushChunk;
+		buffer = buffer.replace(/\r/g, "");
+	}
+	if (buffer.trim() !== "") {
+		handleEventBlock(buffer);
+	}
+
+	return {
+		answer: doneAnswer || accumulatedAnswer,
+		context: doneContext,
+	};
+};
+
 const getErrorMessage = (err: unknown, fallback: string) => {
 	if (
 		typeof err === "object" &&
@@ -86,34 +275,6 @@ const decodeClaims = (token: string | null): TokenClaims | null => {
 		console.error("Failed to decode token", e);
 		return null;
 	}
-};
-
-// Хук для анимации печатания текста
-const useTypingText = (text: string, speed: number = 30) => {
-	const [displayedText, setDisplayedText] = useState("");
-
-	useEffect(() => {
-		if (!text) {
-			setDisplayedText("");
-			return;
-		}
-
-		let index = 0;
-		setDisplayedText("");
-
-		const interval = setInterval(() => {
-			if (index < text.length) {
-				setDisplayedText(text.slice(0, index + 1));
-				index++;
-			} else {
-				clearInterval(interval);
-			}
-		}, speed);
-
-		return () => clearInterval(interval);
-	}, [text, speed]);
-
-	return displayedText;
 };
 
 const renderMarkdown: BubbleProps["contentRender"] = (content) => {
@@ -173,15 +334,8 @@ function App() {
 	const [pdfViewerDocName, setPdfViewerDocName] = useState<string>("");
 	const [pdfViewerUrl, setPdfViewerUrl] = useState<string | null>(null);
 	const [pdfDownloadLoading, setPdfDownloadLoading] = useState(false);
-
-	const [animatingMessageIndex, setAnimatingMessageIndex] = useState<
-		number | null
-	>(null);
-	const displayedText = useTypingText(
-		animatingMessageIndex !== null && animatingMessageIndex >= 0
-			? messages[animatingMessageIndex]?.content || ""
-			: "",
-		5,
+	const [streamingMessageKey, setStreamingMessageKey] = useState<string | null>(
+		null,
 	);
 
 	const isNearBottom = (element: HTMLDivElement) => {
@@ -308,15 +462,15 @@ function App() {
 	}, [historyData, historyId]);
 
 	useEffect(() => {
-		const shouldScroll = messages.length > 0 || displayedText.length > 0;
+		const shouldScroll = messages.length > 0;
 		if (!shouldScroll) return;
 		if (!shouldAutoScrollRef.current) return;
 
 		messagesEndRef.current?.scrollIntoView({
-			behavior: displayedText.length > 0 ? "auto" : "smooth",
+			behavior: streamingMessageKey ? "auto" : "smooth",
 			block: "end",
 		});
-	}, [messages, displayedText]);
+	}, [messages, streamingMessageKey]);
 
 	const getUniqueSources = (context?: AskContextItem[]) => {
 		if (!context?.length) return [];
@@ -461,33 +615,73 @@ function App() {
 				...(chatSettings?.data.settings ?? {}),
 				enableHistory: true,
 			};
+			const aiMessageKey = `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+			setStreamingMessageKey(aiMessageKey);
+			setMessages((prev) => [
+				...prev,
+				{
+					content: "",
+					role: "ai",
+					key: aiMessageKey,
+					sources: [],
+				},
+			]);
 
-			return api.instance.post("/ask", {
-				query,
-				chat_id: chatId,
-				chat_history_id: historyId,
-				model: chatSettings?.data.settings?.model,
-				settings: requestSettings,
-			});
-		},
-		onSuccess: (data) => {
-			const response = (data.data ?? {}) as AskResponse;
-			const sources = getUniqueSources(response.context);
-			setMessages((prev) => {
-				const nextIndex = prev.length;
-				setAnimatingMessageIndex(nextIndex);
-				return [
-					...prev,
-					{
-						content: response.answer || "",
-						role: "ai",
-						key: `ai_${nextIndex}`,
-						sources,
+			try {
+				const response = await streamAskQuestion({
+					query,
+					chatID: chatId,
+					chatHistoryID: historyId,
+					model: chatSettings?.data.settings?.model,
+					settings: requestSettings,
+					token,
+					onDelta: (delta) => {
+						setMessages((prev) =>
+							prev.map((msg) =>
+								msg.key === aiMessageKey
+									? { ...msg, content: `${msg.content}${delta}` }
+									: msg,
+							),
+						);
 					},
-				];
-			});
+				});
+
+				const finalAnswer = response.answer || "";
+				const sources = getUniqueSources(response.context);
+				setMessages((prev) =>
+					prev.map((msg) =>
+						msg.key === aiMessageKey
+							? {
+									...msg,
+									content: finalAnswer || msg.content,
+									sources,
+								}
+							: msg,
+					),
+				);
+
+				return {
+					answer: finalAnswer || response.answer || "",
+					context: response.context,
+				};
+			} catch (err) {
+				setMessages((prev) => {
+					const target = prev.find((msg) => msg.key === aiMessageKey);
+					if (!target || target.content.trim() !== "") {
+						return prev;
+					}
+					return prev.filter((msg) => msg.key !== aiMessageKey);
+				});
+				throw err;
+			} finally {
+				setStreamingMessageKey((prev) =>
+					prev === aiMessageKey ? null : prev,
+				);
+			}
 		},
-		onError: () => message.error("Не удалось получить ответ"),
+		onError: (err: unknown) => {
+			message.error(getErrorMessage(err, "Не удалось получить ответ"));
+		},
 	});
 
 	const sendMessageMutation = useMutation({
@@ -499,11 +693,11 @@ function App() {
 				role: "user",
 			});
 
-			const answer = await askMutation.mutateAsync(text);
+			const answer = (await askMutation.mutateAsync(text)) as AskResponse;
 
 			await api.instance.post("/messages", {
 				chat_history_id: historyId,
-				text: ((answer.data ?? {}) as AskResponse).answer,
+				text: answer.answer || "",
 				role: "assistant",
 			});
 		},
@@ -585,66 +779,78 @@ function App() {
 								onScroll={handleMessagesScroll}
 								className="flex min-w-0 flex-col p-4 gap-4 max-h-[calc(100vh-260px)] overflow-y-auto overflow-x-hidden"
 							>
-								{messages.map((msg, index) => (
-									<div key={msg.key} className="max-w-full min-w-0">
-										<Bubble
-											className="max-w-full min-w-0 overflow-hidden"
-											role={msg.role}
-											content={
-												animatingMessageIndex === index
-													? displayedText
-													: msg.content
-											}
-											contentRender={renderMarkdown}
-											typing={
-												msg.role === "ai" && animatingMessageIndex === index
-													? true
-													: undefined
-											}
-											autoFocus
-											itemType="chat"
-											avatar={
-												msg.role === "user" ? undefined : (
-													<div className="p-2 bg-gray-500 rounded-full w-8 h-8 flex items-center justify-center">
-														AI
-													</div>
-												)
-											}
-											variant="filled"
-											placement={msg.role === "user" ? "end" : "start"}
-										/>
-										{msg.role === "ai" && (msg.sources?.length ?? 0) > 0 ? (
-											<div className="ml-10 mt-2 max-w-full min-w-0 overflow-hidden text-xs text-gray-600 dark:text-gray-300">
-												<div className="mb-1">Использованные PDF:</div>
-												<div className="flex flex-col gap-1 max-w-full">
-													{msg.sources?.map((source) => (
-														<button
-															key={`${msg.key}_${source.DocID || source.DocName}`}
-															type="button"
-															className="w-full max-w-full rounded px-1 py-1 text-left leading-5 hover:bg-black/5 dark:hover:bg-white/10"
-															title={source.DocName || "Документ"}
-															onClick={() => openPdfViewer(source)}
-														>
-															<span className="inline-flex w-full min-w-0 items-start gap-1.5 text-left">
-																<span
-																	aria-hidden="true"
-																	className="mt-0.5 shrink-0"
-																>
-																	📄
-																</span>
-																<span className="block min-w-0 flex-1 break-all whitespace-normal">
-																	{source.DocName || "Документ"}
-																</span>
-															</span>
-														</button>
-													))}
-												</div>
-											</div>
-										) : null}
-									</div>
-								))}
+								{messages.map((msg) => {
+									const isStreamingPlaceholder =
+										msg.role === "ai" &&
+										msg.key === streamingMessageKey &&
+										msg.content.trim() === "";
 
-								{(askMutation.isPending || sendMessageMutation.isPending) && (
+									return (
+										<div key={msg.key} className="max-w-full min-w-0">
+											<Bubble
+												className="max-w-full min-w-0 overflow-hidden"
+												role={msg.role}
+												content={isStreamingPlaceholder ? " " : msg.content}
+												contentRender={
+													isStreamingPlaceholder
+														? () => (
+																<div className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+																	<Spin size="small" />
+																	<span>Подбираю ответ...</span>
+																</div>
+															)
+														: renderMarkdown
+												}
+												typing={
+													msg.role === "ai" && msg.key === streamingMessageKey
+														? true
+														: undefined
+												}
+												autoFocus
+												itemType="chat"
+												avatar={
+													msg.role === "user" ? undefined : (
+														<div className="p-2 bg-gray-500 rounded-full w-8 h-8 flex items-center justify-center">
+															AI
+														</div>
+													)
+												}
+												variant="filled"
+												placement={msg.role === "user" ? "end" : "start"}
+											/>
+											{msg.role === "ai" && (msg.sources?.length ?? 0) > 0 ? (
+												<div className="ml-10 mt-2 max-w-full min-w-0 overflow-hidden text-xs text-gray-600 dark:text-gray-300">
+													<div className="mb-1">Использованные PDF:</div>
+													<div className="flex flex-col gap-1 max-w-full">
+														{msg.sources?.map((source) => (
+															<button
+																key={`${msg.key}_${source.DocID || source.DocName}`}
+																type="button"
+																className="w-full max-w-full rounded px-1 py-1 text-left leading-5 hover:bg-black/5 dark:hover:bg-white/10"
+																title={source.DocName || "Документ"}
+																onClick={() => openPdfViewer(source)}
+															>
+																<span className="inline-flex w-full min-w-0 items-start gap-1.5 text-left">
+																	<span
+																		aria-hidden="true"
+																		className="mt-0.5 shrink-0"
+																	>
+																		📄
+																	</span>
+																	<span className="block min-w-0 flex-1 break-all whitespace-normal">
+																		{source.DocName || "Документ"}
+																	</span>
+																</span>
+															</button>
+														))}
+													</div>
+												</div>
+											) : null}
+										</div>
+									);
+								})}
+
+								{sendMessageMutation.isPending && !askMutation.isPending && (
 									<Bubble
 										content={<Spin />}
 										typing
