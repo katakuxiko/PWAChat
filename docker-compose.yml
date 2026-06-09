@@ -1,0 +1,24 @@
+version: "3.8"
+
+# Docker Compose for `front` (single frontend service)
+# Usage: place `.env.front` next to this file and run:
+#   docker compose -f docker-compose.yml --env-file .env.front pull
+#   docker compose -f docker-compose.yml --env-file .env.front up -d
+
+services:
+  front:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_BASE_URL: ${VITE_BASE_URL:-https://back.avxm.live}
+        VITE_BASE_CHAT_URL: ${VITE_BASE_CHAT_URL:-https://avxm.live/}
+    image: avxm/front-chat:latest
+    ports:
+      - "127.0.0.1:5173:80"
+    networks:
+      - frontnet
+
+networks:
+  frontnet:
+    driver: bridge
